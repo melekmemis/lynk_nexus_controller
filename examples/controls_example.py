@@ -5,7 +5,7 @@ import termios
 import json
 import math
 import lynk_nexus_sdk as lns
-from lynk_nexus_controller.handlers.mission import generate_circle_waypoints, generate_corridor_waypoints
+from lynk_controller.handlers.mission import generate_circle_waypoints, generate_corridor_waypoints
 
 def getch():
     """Reads a single character from stdin without waiting for Enter."""

@@ -18,7 +18,7 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 import os
 
 import lynk_nexus_sdk as lns
-from lynk_nexus_controller.handlers.mission import generate_circle_waypoints, generate_corridor_waypoints
+from lynk_controller.handlers.mission import generate_circle_waypoints, generate_corridor_waypoints
 
 # --- Styling Constants ---
 DARK_PALETTE = """

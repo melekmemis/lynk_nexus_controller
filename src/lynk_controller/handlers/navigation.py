@@ -1,7 +1,7 @@
 import rospy
 from mavros_msgs.msg import GlobalPositionTarget
-from lynk_nexus_controller.handlers.base import BaseCommandHandler
-from lynk_nexus_controller.interfaces import RESULT_SUCCESS, RESULT_FAILURE
+from lynk_controller.handlers.base import BaseCommandHandler
+from lynk_controller.interfaces import RESULT_SUCCESS, RESULT_FAILURE
 from lynk_nexus.msg import Command
 
 class NavigationHandler(BaseCommandHandler):

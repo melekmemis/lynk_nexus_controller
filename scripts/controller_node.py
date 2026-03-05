@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import rospy
-from lynk_nexus_controller.controller import VehicleController
+from lynk_controller.controller import VehicleController
 
 def main():
     try:

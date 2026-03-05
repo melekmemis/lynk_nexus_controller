@@ -2,7 +2,7 @@
   <arg name="vehicle_id" default="1"/>
   
   <node name="lynk_nexus_vehicle_controller"
-        pkg="lynk_nexus_controller"
+        pkg="lynk_controller"
         type="controller_node.py"
         output="screen">
     <param name="vehicle_id" value="$(arg vehicle_id)"/>

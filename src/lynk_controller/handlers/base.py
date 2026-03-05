@@ -1,7 +1,7 @@
 import json
 import rospy
 from typing import Dict, Any
-from lynk_nexus_controller.interfaces import MavrosInterface, LynkInterface, RESULT_SUCCESS, RESULT_FAILURE
+from lynk_controller.interfaces import MavrosInterface, LynkInterface, RESULT_SUCCESS, RESULT_FAILURE
 from lynk_nexus.msg import Command
 
 class BaseCommandHandler:

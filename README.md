@@ -1,1 +1,1 @@
-# lynk_nexus_controller
+# lynk_controller

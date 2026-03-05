@@ -8,8 +8,8 @@ from typing import Dict, Any
 from lynk_nexus.msg import Command, State, Gps
 from mavros_msgs.msg import State as MavrosState
 
-from lynk_nexus_controller.interfaces import MavrosInterface, LynkInterface, RESULT_FAILURE
-from lynk_nexus_controller.handlers import FlightHandler, MissionHandler, NavigationHandler
+from lynk_controller.interfaces import MavrosInterface, LynkInterface, RESULT_FAILURE
+from lynk_controller.handlers import FlightHandler, MissionHandler, NavigationHandler
 
 rospy.loginfo("[VehicleController] DEBUG | controller.py version 3.0 (Modularized) LOADED")
 
