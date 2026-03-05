@@ -3,7 +3,10 @@ import sys
 import json
 import math
 import traceback
+import time
 from datetime import datetime
+import rospy
+from lynk_nexus.msg import State, Gps
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -33,6 +36,8 @@ QPushButton#actionButton { background-color: #1A73E8; color: white; border: none
 QPushButton#actionButton:hover { background-color: #1557B0; }
 QPushButton#dangerButton { background-color: #D93025; color: white; border: none; }
 QPushButton#dangerButton:hover { background-color: #B22222; }
+QPushButton#splineButton { background-color: #FFB74D; color: black; border: none; }
+QPushButton#splineButton:checked { background-color: #4FC3F7; color: black; }
 QTabWidget::pane { border: 1px solid #2C2C2C; top: -1px; background: #121212; }
 QTabBar::tab { background: #1E1E1E; border: 1px solid #2C2C2C; padding: 4px 8px; min-width: 60px; }
 QTabBar::tab:selected { background: #1A73E8; color: white; }
@@ -73,12 +78,25 @@ class SDKWorker(QThread):
 class NexusGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("LYNK Nexus Controller")
+        self.setWindowTitle("LYNK Controller")
         self.setMinimumSize(200, 300)
         self.resize(450, 500)
         self.setStyleSheet(DARK_PALETTE)
         
         self.setup_ui()
+
+        # State Monitoring
+        self.is_armed = False
+        self.relative_alt = 0.0
+        self.last_state_time = 0.0
+        self.last_gps_time = 0.0
+        
+        # Initialize ROS node if not already init
+        if not rospy.core.is_initialized():
+            rospy.init_node("nexus_gui", anonymous=True)
+            
+        self.state_sub = rospy.Subscriber(f"/vehicles/1/lynk/rx/state", State, self._on_state_rx)
+        self.gps_sub = rospy.Subscriber(f"/vehicles/1/lynk/rx/gps", Gps, self._on_gps_rx)
 
         # Initialize SDK
         try:
@@ -210,6 +228,37 @@ class NexusGUI(QMainWindow):
         mode_layout.addWidget(self.corridor_btn)
         layout.addLayout(mode_layout)
 
+        # Global Mission Settings
+        global_settings_layout = QHBoxLayout()
+        
+        # Spline Toggle
+        self.use_spline = QPushButton("Spline Interpolation")
+        self.use_spline.setCheckable(True)
+        self.use_spline.setObjectName("splineButton")
+        self.use_spline.setToolTip("Uses MAV_CMD_NAV_SPLINE_WAYPOINT for smoother turns (ArduPilot)")
+        global_settings_layout.addWidget(self.use_spline)
+
+        # Mission Speed
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel("Mission Speed (m/s):"))
+        self.mission_speed = QDoubleSpinBox()
+        self.mission_speed.setRange(0.5, 20.0) 
+        self.mission_speed.setValue(5.0)
+        speed_layout.addWidget(self.mission_speed)
+        global_settings_layout.addLayout(speed_layout)
+
+        # Max Lean Angle
+        angle_layout = QHBoxLayout()
+        angle_layout.addWidget(QLabel("Max Lean Angle (deg):"))
+        self.max_lean_angle = QDoubleSpinBox()
+        self.max_lean_angle.setRange(10.0, 80.0)
+        self.max_lean_angle.setValue(30.0) 
+        self.max_lean_angle.setToolTip("Limits how far the drone can pitch/roll. Increases max achievable speed. (ArduPilot ATC_ANGLE_MAX)")
+        angle_layout.addWidget(self.max_lean_angle)
+        global_settings_layout.addLayout(angle_layout)
+
+        layout.addLayout(global_settings_layout)
+
         # Stacked Layout for Mission Types
         self.mission_stack = QStackedWidget()
         
@@ -286,12 +335,10 @@ class NexusGUI(QMainWindow):
         corr_btns.addWidget(add_node)
         corr_layout.addLayout(corr_btns)
         
-        self.corr_speed = QDoubleSpinBox(); self.corr_speed.setValue(3.0)
         self.corr_alt = QDoubleSpinBox(); self.corr_alt.setValue(10.0)
         self.corr_width = QDoubleSpinBox(); self.corr_width.setRange(0.1, 50.0); self.corr_width.setValue(2.0)
         
         c_form = QFormLayout()
-        c_form.addRow("Velocity (m/s):", self.corr_speed)
         c_form.addRow("Altitude (m):", self.corr_alt)
         c_form.addRow("Width (m):", self.corr_width)
         corr_layout.addLayout(c_form)
@@ -303,10 +350,19 @@ class NexusGUI(QMainWindow):
         layout.addWidget(self.mission_stack)
 
         # Upload & Start
+        mission_action_layout = QHBoxLayout()
+        
         upload_btn = QPushButton("UPLOAD MISSION")
         upload_btn.setObjectName("actionButton")
         upload_btn.clicked.connect(self.cmd_upload_mission)
-        layout.addWidget(upload_btn)
+        
+        start_btn = QPushButton("START MISSION")
+        start_btn.setObjectName("actionButton")
+        start_btn.clicked.connect(self.cmd_start_mission)
+
+        mission_action_layout.addWidget(upload_btn)
+        mission_action_layout.addWidget(start_btn)
+        layout.addLayout(mission_action_layout)
 
     def add_manual_wp(self):
         row = self.wp_table.rowCount()
@@ -333,6 +389,35 @@ class NexusGUI(QMainWindow):
         
         self.wp_table.removeRow(row)
         self.log("Removed selected waypoint from list and map")
+
+    def _on_state_rx(self, msg):
+        # Update local armed status
+        if self.is_armed != bool(msg.is_armed):
+            self.log(f"STATE CHANGE: Armed={msg.is_armed}")
+        self.is_armed = bool(msg.is_armed)
+        self.last_state_time = time.time()
+
+    def _on_gps_rx(self, msg):
+        # Update local relative altitude from GPS
+        self.relative_alt = float(msg.rel_alt_m)
+        self.last_gps_time = time.time()
+
+    def _check_safety_conditions(self):
+        """Returns True if safe to proceed, False otherwise."""
+        # Ensure we have fresh telemetry
+        now = time.time()
+        state_age = now - self.last_state_time
+        gps_age = now - self.last_gps_time
+        
+        self.log(f"Safety Check: Armed={self.is_armed} ({state_age:.1f}s old), Alt={self.relative_alt:.1f}m ({gps_age:.1f}s old)")
+        
+        # If telemetry is too old (> 10s), we might be disconnected from ROS topics
+        if state_age > 10.0 or gps_age > 10.0:
+            self.log("Telemetry is stale. GUI might not be receiving updates.", "WARNING")
+            # We'll still check the last known values but warn.
+
+        is_safe = self.is_armed and self.relative_alt >= 0.5
+        return is_safe
 
     # --- Commands ---
     def log(self, text, level="INFO"):
@@ -382,24 +467,61 @@ class NexusGUI(QMainWindow):
         status = "Success"
         msg = ""
         
-        # Normalize response parsing (Sdk responses can be complex objects)
-        if hasattr(resp, "result"):
+        # Detailed response logging for debugging
+        self.log(f"DEBUG: Response for {func}: {str(resp)}")
+
+        # 1. Check for SDK exception/manual failure dict
+        if isinstance(resp, dict):
+            if not resp.get("success", True):
+                status = "FAILED"
+                msg = resp.get("message", "Error")
+        # 2. Check for ROS Result Envelope (Asynchronous Result)
+        elif hasattr(resp, "result"):
             if resp.result.status != 0:
                 status = "FAILED"
                 msg = resp.result.message
+        # 3. Check for SendCommandResponse (Synchronous ACK response)
+        elif hasattr(resp, "accepted"):
+            # Inspect raw message for failure
+            raw_msg = getattr(resp, "message", "")
+            if "FAILED" in raw_msg.upper() or not resp.accepted:
+                status = "FAILED"
+                msg = raw_msg or "Command rejected"
+            
+            # Inspect individual ACKs in ack_results_json
+            if hasattr(resp, "ack_results_json") and resp.ack_results_json:
+                try:
+                    acks = json.loads(resp.ack_results_json)
+                    for val in acks.values():
+                        if isinstance(val, str) and "FAILED" in val.upper():
+                            status = "FAILED"
+                            msg = val
+                            break
+                except:
+                    pass
+
+        # 4. Check for success field (General fallback)
         elif hasattr(resp, "success") and not resp.success:
             status = "FAILED"
             msg = getattr(resp, "message", "Unknown error")
-        elif isinstance(resp, dict) and not resp.get("success", True):
-             status = "FAILED"
-             msg = resp.get("message", "Error")
 
-        self.log(f"{func} finished: {status} {msg}")
+        self.log(f"{func} Outcome: {status} {msg}")
+        
         if status == "FAILED":
-            QMessageBox.critical(self, "Command Failed", f"{func} failed:\n{msg}")
+            if "Vehicle is not armed/taken off" in msg or "Safety Check Failed" in msg:
+                QMessageBox.warning(self, "Safety Check Failed", "Vehicle must be armed and flying to perform this action.\n\nPlease Takeoff first!")
+            else:
+                QMessageBox.critical(self, "Command Failed", f"{func} failed:\n{msg}")
 
     def cmd_takeoff(self):
-        self.run_sdk_worker("flight_takeoff", altitude_m=5.0, wait_for_ack=True)
+        reply = QMessageBox.question(
+            self,
+            "Confirm Takeoff",
+            "Are you sure you want to arm the drone and take off?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.run_sdk_worker("flight_takeoff", altitude_m=5.0, wait_for_ack=True)
 
     def cmd_land(self):
         self.run_sdk_worker("flight_land", wait_for_ack=True)
@@ -413,15 +535,32 @@ class NexusGUI(QMainWindow):
         self.run_sdk_worker("send_command", command_name="MISSION_CONTROL", params={"json": json.dumps(payload)}, wait_for_ack=True)
 
     def cmd_resume(self):
+        # GUI Safety Check
+        if not self._check_safety_conditions():
+            QMessageBox.warning(self, "Safety Check Failed", "Vehicle must be armed and flying to perform this action.\n\nPlease Takeoff first!")
+            return
+
         self.log("Resuming mission...")
         payload = {"action": "RESUME"}
         self.run_sdk_worker("send_command", command_name="MISSION_CONTROL", params={"json": json.dumps(payload)}, wait_for_ack=True)
 
     def cmd_goto(self):
-        lat = self.goto_lat.value()
-        lon = self.goto_lon.value()
-        alt = self.goto_alt.value()
-        self.run_sdk_worker("flight_goto", lat=lat, lon=lon, alt=alt, wait_for_ack=True)
+        reply = QMessageBox.question(
+            self,
+            "Confirm GoTo",
+            "Are you sure you want to execute Smart GoTo?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            # GUI Safety Check
+            if not self._check_safety_conditions():
+                QMessageBox.warning(self, "Safety Check Failed", "Vehicle must be armed and flying to perform this action.\n\nPlease Takeoff first!")
+                return
+
+            lat = self.goto_lat.value()
+            lon = self.goto_lon.value()
+            alt = self.goto_alt.value()
+            self.run_sdk_worker("flight_goto", lat=lat, lon=lon, alt=alt, wait_for_ack=True)
 
     def cmd_upload_mission(self):
         waypoints = []
@@ -450,35 +589,50 @@ class NexusGUI(QMainWindow):
                     })
                 if len(path) < 2:
                     raise ValueError("At least 2 nodes required for corridor")
-                waypoints = generate_corridor_waypoints(path, self.corr_speed.value(), self.corr_alt.value())
+                waypoints = generate_corridor_waypoints(path, self.mission_speed.value(), self.corr_alt.value())
                 width_m = self.corr_width.value()
+            
+            use_spline = self.use_spline.isChecked()
             
             if not waypoints:
                 self.log("No waypoints defined!", "WARNING")
                 return
 
-            self.log(f"Uploading mission with {len(waypoints)} points...")
-            if width_m is not None:
-                payload = {
-                    "mission_id": 1,
-                    "waypoints": waypoints,
-                    "replace_existing": True,
-                    "width_m": width_m
-                }
-                self.run_sdk_worker("send_command", command_name="MISSION_UPLOAD", params={"json": json.dumps(payload)}, wait_for_ack=True)
-            else:
-                self.run_sdk_worker("mission_upload", mission_id=1, waypoints=waypoints, replace_existing=True, wait_for_ack=True)
+            self.log(f"Uploading mission with {len(waypoints)} points (Spline: {use_spline})...")
             
-            # Ask to start
-            reply = QMessageBox.question(self, "Mission Uploaded", "Start mission now?", QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                self.log("Starting mission execution...")
-                payload = {"action": "START"}
-                self.run_sdk_worker("send_command", command_name="MISSION_CONTROL", params={"json": json.dumps(payload)}, wait_for_ack=True)
+            payload = {
+                "mission_id": 1,
+                "waypoints": waypoints,
+                "replace_existing": True,
+                "use_spline": use_spline,
+                "speed_m_s": self.mission_speed.value(),
+                "angle_max_deg": self.max_lean_angle.value()
+            }
+            if width_m is not None:
+                payload["width_m"] = width_m
+
+            self.run_sdk_worker("send_command", command_name="MISSION_UPLOAD", params={"json": json.dumps(payload)}, wait_for_ack=True)
 
         except Exception as e:
             self.log(f"Mission Preparation Error: {e}", "ERROR")
             QMessageBox.warning(self, "Mission Error", str(e))
+
+    def cmd_start_mission(self):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Mission Start",
+            "Are you sure you want to start the mission?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            # GUI Safety Check
+            if not self._check_safety_conditions():
+                QMessageBox.warning(self, "Safety Check Failed", "Vehicle must be armed and flying to perform this action.\n\nPlease Takeoff first!")
+                return
+
+            self.log("Starting mission execution...")
+            payload = {"action": "START"}
+            self.run_sdk_worker("send_command", command_name="MISSION_CONTROL", params={"json": json.dumps(payload)}, wait_for_ack=True)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

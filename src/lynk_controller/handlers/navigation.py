@@ -34,9 +34,8 @@ class NavigationHandler(BaseCommandHandler):
             
             rospy.loginfo(f"[NavigationHandler] SMART_GOTO | TARGET: {lat}, {lon} @ {alt}m")
 
+            if not self._check_armed_and_flying(msg, "SMART_GOTO"): return
             if not self._ensure_guided(msg, "SMART_GOTO"): return
-            if not self._ensure_armed(msg, "SMART_GOTO"): return
-            if not self._ensure_takeoff(msg, alt, "SMART_GOTO"): return
 
             target = GlobalPositionTarget()
             target.header.stamp = rospy.Time.now()

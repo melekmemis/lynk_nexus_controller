@@ -78,6 +78,22 @@ class VehicleController:
         cmd_name = msg.command_name.strip().upper()
         rospy.loginfo(f"[VehicleController] >>> RECV <<< | CMD: '{cmd_name}'")
 
+        # Sync Safety Checks before ACK
+        if cmd_name in ["FLIGHT_GOTO", "SMART_GOTO", "MISSION_CONTROL", "FLIGHT_MISSION_CONTROL"]:
+            # Need to check sub-action for control
+            params = self.mission_handler._extract_params(msg)
+            is_start = cmd_name.startswith("MISSION") and str(params.get("action", "")).upper() == "START"
+            is_goto = "GOTO" in cmd_name
+            
+            if is_start or is_goto:
+                if not self.mavros.armed or self.mavros.altitude < 1.0:
+                    err_msg = "Vehicle is not armed/taken off. Please arm and take off first."
+                    rospy.logwarn(f"[VehicleController] Pre-ACK Safety Fail: {err_msg}")
+                    # Use ack_id=1 (Standard) but with FAILED prefix in name
+                    self.lynk.send_ack(msg, ack_id=1, ack_name=f"FAILED: {err_msg}")
+                    self.lynk.send_result(msg, status=RESULT_FAILURE, message=err_msg)
+                    return
+
         # Send Acknowledgment immediately
         self.lynk.send_ack(msg)
 

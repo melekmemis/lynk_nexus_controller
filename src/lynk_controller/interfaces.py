@@ -109,7 +109,7 @@ class LynkInterface:
         self._ack_pub = rospy.Publisher(f"{namespace}/tx/request/ack", Ack, queue_size=10)
         self._result_pub = rospy.Publisher(f"{namespace}/tx/request/result", ResultEnvelope, queue_size=10)
 
-    def send_ack(self, cmd_msg: Command):
+    def send_ack(self, cmd_msg: Command, ack_id: int = 1, ack_name: str = "OK"):
         ack = Ack()
         ack.header.stamp = rospy.Time.now()
         ack.transaction_id = cmd_msg.transaction_id
@@ -117,8 +117,8 @@ class LynkInterface:
         ack.command_name = cmd_msg.command_name
         ack.src_id = self.vehicle_id
         ack.dst_id = cmd_msg.src_id
-        ack.ack_id = 1 
-        ack.ack_name = "OK"
+        ack.ack_id = ack_id 
+        ack.ack_name = ack_name
         self._ack_pub.publish(ack)
 
     def send_result(self, cmd_msg: Command, status: int, message: str = "", error_code: int = 0):

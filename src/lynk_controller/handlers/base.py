@@ -64,6 +64,14 @@ class BaseCommandHandler:
             return False
         return True
 
+    def _check_armed_and_flying(self, msg: Command, cmd_context: str) -> bool:
+        if not self.mavros.armed or self.mavros.altitude < 1.0:
+            message = f"{cmd_context} Fail: Vehicle is not armed/taken off. Please arm and take off first."
+            rospy.logwarn(f"[CommandHandler] {message}")
+            self.lynk.send_result(msg, status=RESULT_FAILURE, message=message)
+            return False
+        return True
+
     def _ensure_takeoff(self, msg: Command, altitude: float, cmd_context: str) -> bool:
         if self.mavros.altitude < 1.0:
             rospy.loginfo(f"[CommandHandler] {cmd_context} | Vehicle on ground. Taking off to {altitude}m first")

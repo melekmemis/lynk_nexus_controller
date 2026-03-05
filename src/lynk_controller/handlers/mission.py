@@ -21,6 +21,21 @@ class MissionHandler(BaseCommandHandler):
             wp_list = payload.get("waypoints", [])
             replace = payload.get("replace_existing", True)
             width_m = payload.get("width_m")
+            use_spline = payload.get("use_spline", False)
+            speed_m_s = payload.get("speed_m_s")
+            angle_max_deg = payload.get("angle_max_deg")
+
+            if speed_m_s is not None:
+                # ArduPilot WPNAV_SPEED is in cm/s
+                speed_cm_s = float(speed_m_s) * 100.0
+                rospy.loginfo(f"[MissionHandler] MISSION | Setting WPNAV_SPEED to {speed_cm_s} cm/s")
+                self.mavros.param_set("WPNAV_SPEED", speed_cm_s)
+
+            if angle_max_deg is not None:
+                # ArduPilot ATC_ANGLE_MAX is in degrees
+                angle_max_deg_float = float(angle_max_deg)
+                rospy.loginfo(f"[MissionHandler] MISSION | Setting ATC_ANGLE_MAX to {angle_max_deg_float} degrees")
+                self.mavros.param_set("ATC_ANGLE_MAX", angle_max_deg_float)
 
             if width_m is not None:
                 # ArduPilot WPNAV_XTRACK_ERR is in cm
@@ -47,10 +62,14 @@ class MissionHandler(BaseCommandHandler):
             home_wp.z_alt = 0.0
             mavros_wps.append(home_wp)
 
+            wp_cmd = 82 if use_spline else 16  # MAV_CMD_NAV_SPLINE_WAYPOINT vs MAV_CMD_NAV_WAYPOINT
+
             for i, wp in enumerate(wp_list):
                 m_wp = Waypoint()
                 m_wp.frame = Waypoint.FRAME_GLOBAL_REL_ALT
-                m_wp.command = 16 # MAV_CMD_NAV_WAYPOINT
+                # ArduPilot requires the first WP of a mission to be a regular WP (16)
+                # Subsequent Splines (82) can then be used.
+                m_wp.command = 16 if (i == 0 and use_spline) else wp_cmd
                 m_wp.is_current = (i == 0)
                 m_wp.autocontinue = True
                 m_wp.x_lat = float(wp.get("lat", 0.0))
@@ -76,9 +95,8 @@ class MissionHandler(BaseCommandHandler):
 
             if action == "START":
                 rospy.loginfo("[MissionHandler] MISSION | Received START command")
+                if not self._check_armed_and_flying(msg, "MISSION_START"): return
                 if not self._ensure_guided(msg, "MISSION_START"): return
-                if not self._ensure_armed(msg, "MISSION_START"): return
-                if not self._ensure_takeoff(msg, 5.0, "MISSION_START"): return
 
                 try:
                     self.mavros.mission_set_current(wp_seq=1)
@@ -100,7 +118,7 @@ class MissionHandler(BaseCommandHandler):
                 target_wp = max(1, self.mavros.current_wp - 1)
                 rospy.loginfo(f"[MissionHandler] MISSION | Resuming mission from waypoint {target_wp} (Current was {self.mavros.current_wp})")
                 
-                if not self._ensure_armed(msg, "MISSION_RESUME"): return
+                if not self._check_armed_and_flying(msg, "MISSION_RESUME"): return
                 
                 # Explicitly set the current waypoint to the target waypoint
                 try:
